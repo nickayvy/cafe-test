@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "./lib/supabase/server";
-import { searchNearbyPlaces } from "./lib/supabase/places";
+import { supabaseAdmin } from "../../../lib/supabase/server"; 
+import { searchNearbyPlaces } from "../../../lib/google/places";
 
 function toNumber(value: string | null): number | null {
   if (value == null) return null;
