@@ -116,6 +116,8 @@ export async function GET(req: NextRequest) {
       })
       .filter(Boolean) as any[];
 
+    console.log("places returned:", places.length, "cafesToUpsert:", cafesToUpsert.length);
+
     if (cafesToUpsert.length) {
       const { error: upsertErr } = await supabase
         .from("cafes")
@@ -124,41 +126,53 @@ export async function GET(req: NextRequest) {
       if (upsertErr) throw upsertErr;
     }
 
-    const placeIds = cafesToUpsert.map((c) => c.place_id);
+    const placeIds = cafesToUpsert
+      .map((c) => c.place_id)
+      .filter((id): id is string => Boolean(id)); // Filter out null/undefined
 
-    // Upsert cache row
-    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
-    const { error: cacheUpsertErr } = await supabase
-      .from("places_cache")
-      .upsert(
-        {
-          cache_key: key,
-          lat_center: roundCoord(lat, precision),
-          lng_center: roundCoord(lng, precision),
-          radius_m: radiusM,
-          place_ids: placeIds,
-          fetched_at: new Date().toISOString(),
-          expires_at: expiresAt,
-          // raw: { places }, // optionally store raw; can get big
-        },
-        { onConflict: "cache_key" }
-      );
+    if (placeIds.length > 0) {
+      // Upsert cache row
+      const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+      const { error: cacheUpsertErr } = await supabase
+        .from("places_cache")
+        .upsert(
+          {
+            cache_key: key,
+            lat_center: roundCoord(lat, precision),
+            lng_center: roundCoord(lng, precision),
+            radius_m: radiusM,
+            place_ids: placeIds,
+            fetched_at: new Date().toISOString(),
+            expires_at: expiresAt,
+            // raw: { places }, // optionally store raw; can get big
+          },
+          { onConflict: "cache_key" }
+        );
 
-    if (cacheUpsertErr) throw cacheUpsertErr;
+      if (cacheUpsertErr) throw cacheUpsertErr;
+    } else {
+      // Don't poison the cache with empty results
+      console.warn("No placeIds from Google; skipping cache write", { key });
+    }
 
     // Return cafes from DB (ensures consistent fields)
-    const { data: cafes, error: cafesErr } = await supabase
-      .from("cafes")
-      .select("id, place_id, name, address, lat, lng, google_rating, user_ratings_total, price_level, types")
-      .in("place_id", placeIds);
+    // If no placeIds, return empty array (no cafes found)
+    let cafes: any[] = [];
+    if (placeIds.length > 0) {
+      const { data, error: cafesErr } = await supabase
+        .from("cafes")
+        .select("id, place_id, name, address, lat, lng, google_rating, user_ratings_total, price_level, types")
+        .in("place_id", placeIds);
 
-    if (cafesErr) throw cafesErr;
+      if (cafesErr) throw cafesErr;
+      cafes = data ?? [];
+    }
 
     return NextResponse.json({
       source: "google",
       cacheKey: key,
       radiusM,
-      cafes: cafes ?? [],
+      cafes,
     });
   } catch (err: any) {
     return NextResponse.json(
